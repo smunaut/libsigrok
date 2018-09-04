@@ -409,6 +409,12 @@ src_libdrivers_la_SOURCES += \
 	src/hardware/ipdbg-la/protocol.c \
 	src/hardware/ipdbg-la/api.c
 endif
+if HW_IUA
+src_libdrivers_la_SOURCES += \
+	src/hardware/iua/protocol.h \
+	src/hardware/iua/protocol.c \
+	src/hardware/iua/api.c
+endif
 if HW_KECHENG_KC_330B
 src_libdrivers_la_SOURCES += \
 	src/hardware/kecheng-kc-330b/protocol.h \
