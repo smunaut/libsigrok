@@ -27,7 +27,21 @@
 
 #define LOG_PREFIX "iua"
 
+#define SERIAL_WRITE_TIMEOUT_MS 10
+
+#define IUA_SER_BUFSIZE 1024
+#define IUA_DAT_BUFSIZE 4 * 1024 * 1024
+
 struct dev_context {
+	/* Settings */
+	uint64_t cur_samplerate;
+
+	/* Serial data buffer */
+	uint8_t ser_buf[IUA_SER_BUFSIZE];
+	int ser_buflen;
+
+	/* Sample data buffer */
+	uint8_t dat_buf[IUA_DAT_BUFSIZE];
 };
 
 SR_PRIV int iua_receive_data(int fd, int revents, void *cb_data);

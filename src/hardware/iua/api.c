@@ -20,53 +20,90 @@
 #include <config.h>
 #include "protocol.h"
 
+static const uint32_t scanopts[] = {
+	SR_CONF_CONN,
+	SR_CONF_SERIALCOMM,
+};
+
+static const uint32_t drvopts[] = {
+	SR_CONF_LOGIC_ANALYZER,
+};
+
+static const uint32_t devopts[] = {
+        SR_CONF_CONTINUOUS,
+	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET,
+};
+
+
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
-	struct drv_context *drvc;
-	GSList *devices;
+	struct sr_config *src;
+	GSList *l, *devices;
+	const char *conn, *serialcomm;
+	struct sr_serial_dev_inst *serial;
+	struct sr_dev_inst *sdi;
+	struct dev_context *devc;
 
-	(void)options;
+	conn = serialcomm = NULL;
+	for (l = options; l; l = l->next) {
+		src = l->data;
+		switch (src->key) {
+		case SR_CONF_CONN:
+			conn = g_variant_get_string(src->data, NULL);
+			break;
+		case SR_CONF_SERIALCOMM:
+			serialcomm = g_variant_get_string(src->data, NULL);
+			break;
+		}
+	}
+	if (!conn)
+		return NULL;
+
+	if (!serialcomm)
+		serialcomm = "921600/8n1/rts=0/dtr=1";
+
+	serial = sr_serial_dev_inst_new(conn, serialcomm);
 
 	devices = NULL;
-	drvc = di->context;
-	drvc->instances = NULL;
 
-	/* TODO: scan for devices, either based on a SR_CONF_CONN option
-	 * or on a USB scan. */
+	sdi = g_malloc0(sizeof(struct sr_dev_inst));
+	sdi->status = SR_ST_INACTIVE;
+	sdi->vendor = g_strdup("Osmocom");
+	sdi->model = g_strdup("iua");
+	devc = g_malloc0(sizeof(struct dev_context));
+	sdi->inst_type = SR_INST_SERIAL;
+	sdi->conn = serial;
+	sdi->priv = devc;
 
-	return devices;
-}
+	sr_channel_new(sdi, 0, SR_CHANNEL_LOGIC, TRUE, "DN");
+	sr_channel_new(sdi, 1, SR_CHANNEL_LOGIC, TRUE, "DP");
 
-static int dev_open(struct sr_dev_inst *sdi)
-{
-	(void)sdi;
+	devc->cur_samplerate = 100000000;
 
-	/* TODO: get handle from sdi->conn and open it. */
+	devices = g_slist_append(devices, sdi);
 
-	return SR_OK;
-}
-
-static int dev_close(struct sr_dev_inst *sdi)
-{
-	(void)sdi;
-
-	/* TODO: get handle from sdi->conn and close it. */
-
-	return SR_OK;
+	return std_scan_complete(di, devices);
 }
 
 static int config_get(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
+	struct dev_context *devc;
 	int ret;
 
-	(void)sdi;
-	(void)data;
 	(void)cg;
+
+	if (!sdi)
+		return SR_ERR_ARG;
+
+	devc = sdi->priv;
 
 	ret = SR_OK;
 	switch (key) {
-	/* TODO */
+	case SR_CONF_SAMPLERATE:
+		*data = g_variant_new_uint64(devc->cur_samplerate);
+		break;
+
 	default:
 		return SR_ERR_NA;
 	}
@@ -77,15 +114,21 @@ static int config_get(uint32_t key, GVariant **data,
 static int config_set(uint32_t key, GVariant *data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
+	struct dev_context *devc;
 	int ret;
 
-	(void)sdi;
-	(void)data;
 	(void)cg;
+
+	if (!sdi)
+		return SR_ERR_ARG;
+
+	devc = sdi->priv;
 
 	ret = SR_OK;
 	switch (key) {
-	/* TODO */
+	case SR_CONF_SAMPLERATE:
+                devc->cur_samplerate = g_variant_get_uint64(data);
+		break;
 	default:
 		ret = SR_ERR_NA;
 	}
@@ -104,9 +147,12 @@ static int config_list(uint32_t key, GVariant **data,
 
 	ret = SR_OK;
 	switch (key) {
-	/* TODO */
+	case SR_CONF_SCAN_OPTIONS:
+	case SR_CONF_DEVICE_OPTIONS:
+		ret = STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
+		break;
 	default:
-		return SR_ERR_NA;
+		ret = SR_ERR_NA;
 	}
 
 	return ret;
@@ -114,26 +160,51 @@ static int config_list(uint32_t key, GVariant **data,
 
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
-	/* TODO: configure hardware, reset acquisition state, set up
-	 * callbacks and send header packet. */
+	struct sr_serial_dev_inst *serial;
 
-	(void)sdi;
+	sr_info("Acq start");
+
+	std_session_send_df_header(sdi);
+
+	serial = sdi->conn;
+	serial_source_add(sdi->session, serial, G_IO_IN, 100,
+			iua_receive_data, (void *)sdi);
+
+	if (serial_write_blocking(serial, "e", 1, SERIAL_WRITE_TIMEOUT_MS) < 0) {
+		sr_err("Unable to send (e)nable command.");
+		return SR_ERR;
+	}
 
 	return SR_OK;
 }
 
 static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
-	/* TODO: stop acquisition. */
+	struct sr_serial_dev_inst *serial;
+	const char *prefix;
+	int ret;
 
-	(void)sdi;
+	sr_info("Acq stop");
 
-	return SR_OK;
+	serial = sdi->conn;
+	prefix = sdi->driver->name;
+
+	if (serial_write_blocking(serial, "d", 1, SERIAL_WRITE_TIMEOUT_MS) < 0) {
+		sr_err("Unable to send (d)isable command.");
+		return SR_ERR;
+	}
+
+	if ((ret = serial_source_remove(sdi->session, serial)) < 0) {
+		sr_err("%s: Failed to remove source: %d.", prefix, ret);
+		return ret;
+	}
+
+	return std_session_send_df_end(sdi);
 }
 
 SR_PRIV struct sr_dev_driver iua_driver_info = {
 	.name = "iua",
-	.longname = "iua",
+	.longname = "ice40 USB Analyzer",
 	.api_version = 1,
 	.init = std_init,
 	.cleanup = std_cleanup,
@@ -143,8 +214,8 @@ SR_PRIV struct sr_dev_driver iua_driver_info = {
 	.config_get = config_get,
 	.config_set = config_set,
 	.config_list = config_list,
-	.dev_open = dev_open,
-	.dev_close = dev_close,
+	.dev_open = std_serial_dev_open,
+	.dev_close = std_serial_dev_close,
 	.dev_acquisition_start = dev_acquisition_start,
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
