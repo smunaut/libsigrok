@@ -60,7 +60,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		return NULL;
 
 	if (!serialcomm)
-		serialcomm = "921600/8n1/rts=0/dtr=1";
+		serialcomm = "2000000/8n1/rts=0/dtr=1";
 
 	serial = sr_serial_dev_inst_new(conn, serialcomm);
 
@@ -78,7 +78,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	sr_channel_new(sdi, 0, SR_CHANNEL_LOGIC, TRUE, "DN");
 	sr_channel_new(sdi, 1, SR_CHANNEL_LOGIC, TRUE, "DP");
 
-	devc->cur_samplerate = 100000000;
+	devc->cur_samplerate = 96000000;
 
 	devices = g_slist_append(devices, sdi);
 
